@@ -56,11 +56,17 @@ def generate_mcqs(text):
             ]
         }
 
-        r = requests.post(url, headers=headers, json=payload, timeout=60)
-        r.raise_for_status()
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        response.raise_for_status()
 
-        raw = r.json()["choices"][0]["message"]["content"]
+        raw = response.json()["choices"][0]["message"]["content"]
         match = re.search(r"\[.*\]", raw, re.S)
+
         if not match:
             return []
 
@@ -69,8 +75,7 @@ def generate_mcqs(text):
     except Exception as e:
         print("MCQ generation error:", e)
         return []
-
-
+        
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.document.get_file()
     await file.download_to_drive("input.pdf")
