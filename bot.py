@@ -1,28 +1,4 @@
-import os
-import re
-import json
-import asyncio
-import requests
-from pypdf import PdfReader
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CommandHandler,
-    ContextTypes,
-    filters,
-)
-
-# ================== ENV ==================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
-# ================== PDF TEXT ==================
-def extract_full_text(pdf_path):
-    reader = PdfReader(pdf_path)
-    text = ""
-    for page in reader.pages:
-        t = page.extract_text()
+       t = page.extract_text()
         if t:
             text += t + "\n"
     return text
@@ -391,6 +367,180 @@ def main():
     app.add_handler(MessageHandler(filters.Document.PDF, handle_pdf))
 
     print("MCQ Bot running")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
+import os
+import re
+import io
+import logging
+from typing import List
+
+import pdfplumber
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+# =========================
+# CONFIG
+# =========================
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # set in Railway variables
+MAX_MESSAGE_LENGTH = 3500  # Telegram safe limit
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+# =========================
+# HELPERS
+# =========================
+
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+    text = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text.append(page_text)
+    return "\n".join(text)
+
+
+def extract_existing_mcqs(text: str) -> List[str]:
+    """
+    Tries to detect MCQs already present in PDF.
+    Looks for patterns like:
+    1. Question?
+       a) ...
+       b) ...
+    """
+    mcqs = []
+    pattern = re.compile(
+        r"\n?\d+\.\s.*?(?:\n[a-dA-D][\).].*){2,}",
+        re.DOTALL
+    )
+    matches = pattern.findall(text)
+    for m in matches:
+        cleaned = m.strip()
+        if len(cleaned) > 30:
+            mcqs.append(cleaned)
+    return mcqs
+
+
+def generate_ai_mcqs_from_theory(text: str, limit: int = 40) -> List[str]:
+    """
+    SAFE fallback AI logic (NO API).
+    Converts theory sentences into MCQ-style questions.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    mcqs = []
+
+    for s in sentences:
+        if len(mcqs) >= limit:
+            break
+        if len(s) < 60:
+            continue
+        question = f"Q. What is meant by the following?\n{s.strip()}"
+        options = (
+            "A) Correct explanation\n"
+            "B) Incorrect explanation\n"
+            "C) Partially correct\n"
+            "D) None of the above"
+        )
+        mcqs.append(f"{question}\n{options}")
+
+    return mcqs
+
+
+def chunk_text(text: str) -> List[str]:
+    chunks = []
+    while text:
+        chunks.append(text[:MAX_MESSAGE_LENGTH])
+        text = text[MAX_MESSAGE_LENGTH:]
+    return chunks
+
+
+# =========================
+# HANDLERS
+# =========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📘 Send me a PDF.\n"
+        "I will:\n"
+        "✔ Extract MCQs already present\n"
+        "✔ Generate additional MCQs from theory\n"
+        "✔ Send everything as text (safe & stable)"
+    )
+
+
+async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+
+    if not document.file_name.lower().endswith(".pdf"):
+        await update.message.reply_text("❌ Please send a PDF file.")
+        return
+
+    await update.message.reply_text("📄 PDF received. Processing…")
+
+    file = await document.get_file()
+    pdf_bytes = await file.download_as_bytearray()
+
+    text = extract_text_from_pdf(pdf_bytes)
+
+    if not text.strip():
+        await update.message.reply_text("❌ Could not read text from PDF.")
+        return
+
+    existing_mcqs = extract_existing_mcqs(text)
+    ai_mcqs = generate_ai_mcqs_from_theory(text)
+
+    all_mcqs = existing_mcqs + ai_mcqs
+
+    if not all_mcqs:
+        await update.message.reply_text("⚠️ No MCQs could be generated.")
+        return
+
+    await update.message.reply_text(
+        f"✅ Found {len(existing_mcqs)} MCQs in PDF\n"
+        f"🤖 Generated {len(ai_mcqs)} new MCQs\n"
+        f"📤 Sending now…"
+    )
+
+    full_text = "\n\n".join(
+        f"{i+1}. {mcq}" for i, mcq in enumerate(all_mcqs)
+    )
+
+    for chunk in chunk_text(full_text):
+        await update.message.reply_text(chunk)
+
+    await update.message.reply_text(
+        f"🎉 Done. Generated {len(all_mcqs)} MCQs."
+    )
+
+
+# =========================
+# MAIN
+# =========================
+
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN not set")
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_pdf))
+
+    print("🤖 MCQ Bot running...")
     app.run_polling(drop_pending_updates=True)
 
 
