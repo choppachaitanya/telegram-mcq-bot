@@ -108,5 +108,7 @@ def main():
     logging.info("MCQ Bot running")
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+# Keep Railway container alive
+while True:
+    logging.info("Heartbeat: bot still alive")
+    time.sleep(60)
