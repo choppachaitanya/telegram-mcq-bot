@@ -1,3 +1,2 @@
 python-telegram-bot==20.7
-requests
-pypdf
+PyPDF2==3.0.1
