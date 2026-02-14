@@ -1,3 +1,5 @@
 python-telegram-bot==20.7
 PyPDF2
 requests
+openai
+pypdf
